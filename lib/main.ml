@@ -20,6 +20,19 @@ let win_for_x =
       ({ row = 1; column = 2 }, X);
     ]
 
+let almost_win =
+  init_game
+    [
+      ({ row = 0; column = 0 }, X);
+      ({ row = 1; column = 0 }, O);
+      ({ row = 2; column = 2 }, X);
+      ({ row = 2; column = 0 }, O);
+      ({ row = 2; column = 1 }, X);
+      ({ row = 1; column = 1 }, O);
+      ({ row = 0; column = 2 }, X);
+      ({ row = 0; column = 1 }, O);
+    ]
+
 let non_win =
   init_game
     [
@@ -80,13 +93,39 @@ let%expect_test "print_non_win" =
 
 (* Exercise 1 *)
 let available_moves (game : Game.t) : Position.t list =
-  ignore game;
-  failwith "Implement me!"
+  let possible_positions = Game.get_all_valid_positions game in
+  List.filter possible_positions ~f:(fun position ->
+      match Map.find game.board position with None -> true | Some _ -> false)
+
+let%expect_test "no_available_moves" =
+  List.iter (available_moves win_for_x) ~f:(fun position ->
+      Position.to_string position |> print_endline);
+  [%expect {||}];
+  return ()
+
+let%expect_test "some_available_moves" =
+  List.iter (available_moves non_win) ~f:(fun position ->
+      Position.to_string position |> print_endline);
+  [%expect
+    {|
+  ((row 0) (column 1))
+  ((row 0) (column 2))
+  ((row 1) (column 1))
+  ((row 1) (column 2))
+  ((row 2) (column 1))
+  |}];
+  return ()
+
+let%expect_test "one_available_move" =
+  List.iter (available_moves almost_win) ~f:(fun position ->
+      Position.to_string position |> print_endline);
+  [%expect {|((row 1) (column 2))|}];
+  return ()
 
 (* Exercise 2 *)
 let evaluate (game : Game.t) : Evaluation.t =
   ignore game;
-  failwith "Implement me!"
+  failwith ""
 
 (* Exercise 3 *)
 let winning_moves ~(me : Piece.t) (game : Game.t) : Position.t list =
