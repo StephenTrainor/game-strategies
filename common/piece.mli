@@ -7,3 +7,4 @@ val to_string : t -> string
 
 (* [flip] gives you the "other" piece. | X -> O | O -> X *)
 val flip : t -> t
+val equal : t -> t -> bool
