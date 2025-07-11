@@ -16,45 +16,77 @@ let get_all_valid_positions t : Position.t list =
       let row = i / board_length in
       ({ row; column } : Position.t))
 
-let all_equal_structural t l =
-  match l with
-  | [] -> true
-  | head :: tail -> (
-      let first_piece = Map.find t.board head in
-      match first_piece with
-      | None -> false
-      | Some first_piece ->
-          List.for_all tail ~f:(fun position ->
-              match Map.find t.board position with
-              | None -> false
-              | Some other_piece -> Piece.equal first_piece other_piece))
+let infinity piece =
+  match piece with Piece.X -> Float.infinity | O -> Float.neg_infinity
 
-let find_first_some (l : 'a option list) ~func =
-  match List.findi l ~f:(fun _ x -> func x) with
-  | None -> None
-  | Some (_, element) -> element
+let score_sequence piece consecutive =
+  let consecutive = float_of_int consecutive in
+  match piece with
+  | None -> 0.0
+  | Some Piece.X -> Float.square consecutive
+  | Some O -> Float.square consecutive *. -1.
 
-let check_for_winning_piece t position : Piece.t option =
-  let pieces_in_a_row_needed = Game_kind.win_length t.game_kind in
-  let possible_directions = Position.offsets_no_duplicate_directions in
-  let potential_winning_sequences =
-    List.map possible_directions ~f:(fun direction ->
-        List.init pieces_in_a_row_needed ~f:(fun number_of_applications ->
-            Fn.apply_n_times ~n:number_of_applications direction position))
+let score_list t l =
+  let win_length = Game_kind.win_length t.game_kind in
+  let rec scoring_loop l prev consecutive total_score =
+    if consecutive = win_length then infinity (Option.value_exn prev)
+    else
+      match l with
+      | [] -> total_score +. score_sequence prev consecutive
+      | head :: tail -> (
+          let next = Map.find t.board head in
+          match (prev, next) with
+          | Some Piece.X, Some Piece.X | Some O, Some O ->
+              scoring_loop tail prev (consecutive + 1) total_score
+          | _ ->
+              scoring_loop tail next 1
+                (total_score +. score_sequence prev consecutive))
   in
-  let equal_sequences =
-    List.map potential_winning_sequences ~f:(fun sequence ->
-        if all_equal_structural t sequence then
-          Map.find t.board (List.hd_exn sequence)
-        else None)
+  scoring_loop l None 0 0.0
+
+let sum_float_list = List.fold ~init:0.0 ~f:(fun acc rest -> acc +. rest)
+
+let score t =
+  let board_length = Game_kind.board_length t.game_kind in
+  let row_total =
+    List.init board_length ~f:(fun row ->
+        let list_of_rows =
+          List.init board_length ~f:(fun column -> { Position.row; column })
+        in
+        score_list t list_of_rows)
+    |> sum_float_list
   in
-  find_first_some equal_sequences ~func:Option.is_some
+  let column_total =
+    List.init board_length ~f:(fun column ->
+        let list_of_columns =
+          List.init board_length ~f:(fun row -> { Position.row; column })
+        in
+        score_list t list_of_columns)
+    |> sum_float_list
+  in
+  let diagonals = 2 * board_length - 1 in
+  let backward_diagonal_total = 
+    List.init diagonals ~f:(fun row -> 
+      let diagonal = match row >= board_length with 
+      | true ->  List.init (row + 1 - board_length) ~f:(fun column -> {Position.row = column; column = ((2 * board_length) - row + column - 1)})
+      | false -> List.init (board_length - row) ~f:(fun column -> {Position.row = (row + column); column})
+      in
+      score_list t diagonal
+    ) |> sum_float_list
+  in
+  let forward_diagonal_total = 
+    List.init diagonals ~f:(fun row -> 
+      let diagonal = match row >= board_length with 
+      | true ->  List.init (row + 1 - board_length) ~f:(fun column -> { Position.row = (2 * board_length) - row + column - 1; column = (board_length - column - 1)})
+      | false -> List.init (row + 1) ~f:(fun column -> { Position.row = (row - column); column})
+      in
+      score_list t diagonal
+    ) |> sum_float_list
+  in
+  row_total +. column_total +. backward_diagonal_total +. forward_diagonal_total
 
 let return_winner t : Piece.t option =
-  let positions = get_all_valid_positions t in
-  List.fold positions
-    ~init:(None : Piece.t option)
-    ~f:(fun acc position ->
-      match acc with
-      | Some _piece -> acc
-      | None -> check_for_winning_piece t position)
+  let score = score t in
+  match Float.is_finite score with
+  | true -> None
+  | false -> if Float.( > ) score 0.0 then Some Piece.X else Some O
