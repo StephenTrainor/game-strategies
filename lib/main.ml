@@ -381,33 +381,6 @@ let rec minimax ~game ~depth ~current_player alpha beta =
                 (new_games_from_neighbors game current_player)
                 Float.infinity alpha beta))
 
-(* let rec minimax ~game ~depth ~current_player =
-  match depth with
-  | 0 -> Game.score game
-  | _ -> (
-      match evaluate game with
-      | Evaluation.Game_over { winner = Some winning_piece } ->
-          Game.infinity winning_piece
-      | Game_over { winner = None } -> 0.0
-      | Game_continues | Illegal_move -> (
-          match current_player with
-          | Piece.X ->
-              List.fold (new_games_from_neighbors game current_player)
-                ~init:Float.neg_infinity ~f:(fun acc new_game ->
-                  let score =
-                    minimax ~game:new_game ~depth:(depth - 1)
-                      ~current_player:(Piece.flip current_player)
-                  in
-                  Float.max acc score)
-          | O ->
-              List.fold (new_games_from_neighbors game current_player)
-                ~init:Float.infinity ~f:(fun acc new_game ->
-                  let score =
-                    minimax ~game:new_game ~depth:(depth - 1)
-                      ~current_player:(Piece.flip current_player)
-                  in
-                  Float.min acc score))) *)
-
 let max_tuple l =
   List.max_elt l ~compare:(fun (a, _) (b, _) -> Float.compare a b)
 
@@ -421,9 +394,6 @@ let make_move ~(game : Game.t) ~(you_play : Piece.t) : Position.t =
       let middle = Game_kind.board_length game.game_kind / 2 in
       { row = middle; column = middle }
   | _ -> (
-      (* let winning_moves = winning_moves ~me:you_play game in
-      match winning_moves with
-      | [] -> ( *)
       let minimaxed_moves =
         List.map (available_moves_adjacent_to_existing game ~depth:1)
           ~f:(fun move ->
@@ -441,4 +411,3 @@ let make_move ~(game : Game.t) ~(you_play : Piece.t) : Position.t =
       match tuple_fn_to_use minimaxed_moves with
       | None -> List.random_element_exn (available_moves game)
       | Some (_, position) -> position)
-(* | move :: _ -> move) *)
