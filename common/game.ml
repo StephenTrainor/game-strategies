@@ -18,7 +18,6 @@ let get_all_valid_positions t : Position.t list =
 
 let infinity piece =
   match piece with Piece.X -> 999999.0 | O -> (-999999.0)
-  (* match piece with Piece.X -> Float.infinity | O -> Float.neg_infinity *)
 
 let score_sequence piece consecutive =
   let consecutive = float_of_int consecutive in
