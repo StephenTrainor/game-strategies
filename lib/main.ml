@@ -5,6 +5,9 @@ open! Game_strategies_common_lib
 let print_positions l =
   List.iter l ~f:(fun li -> Position.to_string li |> print_endline)
 
+let x_float_infinity = 999999.0;;
+let o_float_infinity = -999999.0;;
+
 (* This is a helper function for constructing games from a list of positions *)
 let init_game (board : (Position.t * Piece.t) list) : Game.t =
   { (Game.empty Tic_tac_toe) with board = Position.Map.of_alist_exn board }
@@ -107,31 +110,6 @@ let available_moves (game : Game.t) : Position.t list =
          match Map.find game.board position with
          | None -> true
          | Some _piece -> false)
-
-(* clean up or make more efficient if needed *)
-let available_moves_adjacent_to_existing ?(depth = 1) (game : Game.t) :
-    Position.t list =
-  let keys = Map.key_set game.board in
-  let adjacent_moves = ref Position.Set.empty in
-  let rec loop l n =
-    match n with
-    | 0 -> ()
-    | _ ->
-        Set.iter l ~f:(fun key ->
-            List.iter Position.all_offsets ~f:(fun function_offset ->
-                let neighbor = function_offset key in
-                if
-                  (not (Map.mem game.board neighbor))
-                  && Position.in_bounds neighbor ~game_kind:game.game_kind
-                then adjacent_moves := Set.add !adjacent_moves neighbor));
-        loop !adjacent_moves (n - 1)
-  in
-  loop keys depth;
-  match Set.length !adjacent_moves with
-  | 0 ->
-      let middle = Game_kind.board_length game.game_kind / 2 in
-      [ { row = middle; column = middle } ]
-  | _ -> Set.to_list !adjacent_moves
 
 let%expect_test "no_available_moves" =
   print_positions (available_moves win_for_x);
@@ -330,56 +308,102 @@ let%expect_test "not_immediately_lose_block_win" =
   [%expect {|((row 1) (column 1))|}];
   return ()
 
+let available_moves_adjacent_to_existing ?(depth = 1) (game : Game.t) =
+  let keys = Map.key_set game.board in
+  let adjacent_moves = ref Position.Set.empty in
+  let rec loop l n =
+    match n with
+    | 0 -> ()
+    | _ ->
+        Set.iter l ~f:(fun key ->
+            List.iter Position.all_offsets ~f:(fun function_offset ->
+                let neighbor = function_offset key in
+                if
+                  (not (Map.mem game.board neighbor))
+                  && Position.in_bounds neighbor ~game_kind:game.game_kind
+                then adjacent_moves := Set.add !adjacent_moves neighbor));
+        loop !adjacent_moves (n - 1)
+  in
+  loop keys depth;
+  match Set.length !adjacent_moves with
+  | 0 ->
+      let middle = Game_kind.board_length game.game_kind / 2 in
+      [ { Position.row = middle; column = middle } ]
+  | _ -> Set.to_list !adjacent_moves
+
+let is_winning_infinite piece score =
+  match piece with 
+  | Piece.X -> if Float.(>) score 10000.0 then true else false
+  | O -> if Float.(<) score (-10000.0) then true else false
+
+let is_winning_infinite_helper piece pair = is_winning_infinite piece (fst pair)
+
+let get_best_moves game =
+  let _, critical_positions = Game.score game in
+  match critical_positions with
+  | [] -> available_moves_adjacent_to_existing game ~depth:1
+  | _ :: _ -> critical_positions
+
 let new_games_from_neighbors (game : Game.t) piece =
-  (* available_moves game *)
-  available_moves_adjacent_to_existing game ~depth:1
+  get_best_moves game
   |> List.map ~f:(fun neighbor -> Game.set_piece game neighbor piece)
 
-let rec minimax ~game ~depth ~current_player alpha beta =
+let new_games_from_critical_positions game positions piece =
+  List.map positions ~f:(fun neighbor -> Game.set_piece game neighbor piece)
+
+(* iterative deepening *)
+let rec minimax ~game ~depth ~current_player alpha beta finish_by =
   match depth with
-  | 0 -> Game.score game
+  | 0 -> fst (Game.score game)
   | _ -> (
-      match evaluate game with
-      | Evaluation.Game_over { winner = Some winning_piece } ->
-          Game.infinity winning_piece
-      | Game_over { winner = None } -> 0.0
-      | Game_continues | Illegal_move -> (
-          let bias = 1.0 in
-          match current_player with
-          | Piece.X ->
-              let rec loop l acc alpha beta =
-                match l with
-                | [] -> acc
-                | new_game :: tail ->
-                    let score =
-                      minimax ~game:new_game ~depth:(depth - 1)
-                        ~current_player:(Piece.flip current_player)
-                        alpha beta
-                    in
-                    let acc = Float.max acc (bias *. score) in
-                    if Float.( >= ) acc beta then acc
-                    else loop tail acc (Float.max alpha acc) beta
-              in
-              loop
-                (new_games_from_neighbors game current_player)
-                Float.neg_infinity alpha beta
-          | O ->
-              let rec loop l acc alpha beta =
-                match l with
-                | [] -> acc
-                | new_game :: tail ->
-                    let score =
-                      minimax ~game:new_game ~depth:(depth - 1)
-                        ~current_player:(Piece.flip current_player)
-                        alpha beta
-                    in
-                    let acc = Float.min acc (bias *. score) in
-                    if Float.( <= ) acc alpha then acc
-                    else loop tail acc alpha (Float.min beta acc)
-              in
-              loop
-                (new_games_from_neighbors game current_player)
-                Float.infinity alpha beta))
+      if Time_ns_unix.( < ) finish_by (Time_ns_unix.now ()) then
+        match current_player with
+        | Piece.X -> o_float_infinity
+        | O -> x_float_infinity
+      else
+        let score, critical_positions = Game.score game in
+        let critical_games =
+          match critical_positions with
+          | [] -> new_games_from_neighbors game current_player
+          | _ :: _ ->
+              new_games_from_critical_positions game critical_positions
+                current_player
+        in
+        match is_winning_infinite current_player score with
+        | true -> score
+        | false -> (
+            let bias = 0.9 in
+            match current_player with
+            | Piece.X ->
+                let rec loop l acc alpha beta =
+                  match l with
+                  | [] -> acc
+                  | new_game :: tail ->
+                      let score =
+                        minimax ~game:new_game ~depth:(depth - 1)
+                          ~current_player:(Piece.flip current_player)
+                          alpha beta finish_by
+                      in
+                      let acc = Float.max acc (bias *. score) in
+                      if Float.( >= ) acc beta then acc
+                      else loop tail acc (Float.max alpha acc) beta
+                in
+                loop critical_games o_float_infinity alpha beta
+            | O ->
+                let rec loop l acc alpha beta =
+                  match l with
+                  | [] -> acc
+                  | new_game :: tail ->
+                      let score =
+                        minimax ~game:new_game ~depth:(depth - 1)
+                          ~current_player:(Piece.flip current_player)
+                          alpha beta finish_by
+                      in
+                      let acc = Float.min acc (bias *. score) in
+                      if Float.( <= ) acc alpha then acc
+                      else loop tail acc alpha (Float.min beta acc)
+                in
+                loop critical_games x_float_infinity alpha beta))
 
 let max_tuple l =
   List.max_elt l ~compare:(fun (a, _) (b, _) -> Float.compare a b)
@@ -394,20 +418,48 @@ let make_move ~(game : Game.t) ~(you_play : Piece.t) : Position.t =
       let middle = Game_kind.board_length game.game_kind / 2 in
       { row = middle; column = middle }
   | _ -> (
-      let minimaxed_moves =
-        List.map (available_moves_adjacent_to_existing game ~depth:1)
-          ~f:(fun move ->
-            ( minimax
-                ~game:(Game.set_piece game move you_play)
-                ~depth:3 ~current_player:(Piece.flip you_play)
-                Float.neg_infinity Float.infinity,
-              move ))
-      in
-      let tuple_fn_to_use =
-        match you_play with Piece.O -> min_tuple | X -> max_tuple
-      in
-      (* print_s [%sexp (minimaxed_moves : ((float * Position.t) list))];
-        print_endline ""; *)
-      match tuple_fn_to_use minimaxed_moves with
-      | None -> List.random_element_exn (available_moves game)
-      | Some (_, position) -> position)
+      let winning_moves = winning_moves ~me:you_play game in
+      match winning_moves with
+      | [] -> (
+          let start_time = Time_ns_unix.now () in
+          let finish_by =
+            Time_ns_unix.add start_time (Time_ns_unix.Span.of_ms 9900.0)
+          in
+          let rec depth_loop current_depth best_so_far =
+            if
+              Float.( >= )
+                (Time_ns_unix.Span.to_ms
+                   (Time_ns_unix.diff (Time_ns_unix.now ()) start_time))
+                9800.0
+            then (
+              print_endline (string_of_int current_depth);
+              best_so_far)
+            else
+              let get_best_moves = get_best_moves game in
+              match current_depth <= 225 with
+              | false -> best_so_far
+              | true -> (
+                  let minimaxed_moves =
+                    List.map get_best_moves ~f:(fun move ->
+                        ( minimax
+                            ~game:(Game.set_piece game move you_play)
+                            ~depth:current_depth
+                            ~current_player:(Piece.flip you_play)
+                            o_float_infinity x_float_infinity finish_by,
+                          move ))
+                  in
+                  let tuple_fn_to_use =
+                    match you_play with Piece.O -> min_tuple | X -> max_tuple
+                  in
+                  match tuple_fn_to_use minimaxed_moves with
+                  | None -> depth_loop (current_depth + 1) best_so_far
+                  | Some pair -> ( 
+                      match is_winning_infinite_helper you_play pair with
+                      | true -> Some pair
+                      | false -> depth_loop (current_depth + 1) (Some pair)
+                      ))
+          in
+          match depth_loop 1 None with
+          | None -> List.random_element_exn (available_moves game)
+          | Some (_, best_position) -> best_position)
+      | win :: _ -> win)
